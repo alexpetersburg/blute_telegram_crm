@@ -1,0 +1,155 @@
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+  const tg = window.Telegram?.WebApp;
+  if (tg) tg.ready();
+
+  // === НАСТРОЙКИ GOOGLE SHEETS ===
+  const SHEET_ID = "1erHSPEUpDIz-RFH65KcmMQoEXUOSnoK5ApaEkE3knzQ";      // из URL таблицы
+  const SHEET_NAME = "price";                 // имя листа
+  const API_KEY = "PASTE_API_KEY_HERE";       // ключ из Google Cloud
+  const RANGE = `${SHEET_NAME}!A1:E100`;      // id,name,price,enabled,sort
+
+  const state = { qty: {}, items: [] };
+
+  const grid = document.getElementById("grid");
+  const cart = document.getElementById("cart");
+  const totalEl = document.getElementById("total");
+
+  function money(n){ return `${Number(n).toLocaleString("ru-RU")} ₽`; }
+
+  async function loadItemsFromSheets() {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(RANGE)}?key=${API_KEY}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Sheets API error");
+    const data = await res.json();
+
+    const rows = data.values || [];
+    if (rows.length < 2) return [];
+
+    const header = rows[0].map(h => String(h).trim().toLowerCase());
+    const idx = (name) => header.indexOf(name);
+
+    const iId = idx("id");
+    const iName = idx("name");
+    const iPrice = idx("price");
+    const iEnabled = idx("enabled");
+    const iSort = idx("sort");
+
+    const items = [];
+    for (const r of rows.slice(1)) {
+      const id = String(r[iId] ?? "").trim();
+      const name = String(r[iName] ?? "").trim();
+      const price = Number(String(r[iPrice] ?? "0").replace(",", "."));
+      const enabledRaw = String(r[iEnabled] ?? "TRUE").trim().toUpperCase();
+      const enabled = enabledRaw === "TRUE" || enabledRaw === "1" || enabledRaw === "YES";
+      const sort = Number(String(r[iSort] ?? "0"));
+
+      if (!id || !name || !Number.isFinite(price)) continue;
+      if (!enabled) continue;
+
+      items.push({ id, name, price: Math.round(price), sort: Number.isFinite(sort) ? sort : 0 });
+    }
+
+    items.sort((a,b) => a.sort - b.sort);
+    return items.slice(0, 15);
+  }
+
+  function calcTotal() {
+    let total = 0;
+    for (const it of state.items) total += (state.qty[it.id] || 0) * it.price;
+    return total;
+  }
+
+  function renderGrid() {
+    grid.innerHTML = "";
+    for (const it of state.items) {
+      const q = state.qty[it.id] || 0;
+      const el = document.createElement("div");
+      el.className = "card";
+      el.innerHTML = `
+        <div class="name">${it.name}</div>
+        <div class="price">${money(it.price)} за шт</div>
+        <div class="row">
+          <button class="btn btnSmall btnMinus" data-id="${it.id}" data-action="minus">−</button>
+          <div class="qty" id="qty_${it.id}">${q}</div>
+          <button class="btn btnSmall btnPlus" data-id="${it.id}" data-action="plus">+</button>
+        </div>
+      `;
+      grid.appendChild(el);
+    }
+  }
+
+  function renderCart() {
+    const lines = [];
+    for (const it of state.items) {
+      const q = state.qty[it.id] || 0;
+      if (!q) continue;
+      const sum = q * it.price;
+      lines.push(`
+        <div class="cartLine">
+          <div class="cartLeft">
+            <div><b>${it.name}</b></div>
+            <div class="muted">${q} × ${money(it.price)} = ${money(sum)}</div>
+          </div>
+          <div style="font-weight:800">${money(sum)}</div>
+        </div>
+      `);
+    }
+    cart.innerHTML = lines.length ? lines.join("") : "Пока пусто";
+    totalEl.textContent = money(calcTotal());
+  }
+
+  function setQty(id, next) {
+    state.qty[id] = Math.max(0, next);
+    const qEl = document.getElementById(`qty_${id}`);
+    if (qEl) qEl.textContent = state.qty[id];
+    renderCart();
+  }
+
+  grid.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const action = btn.dataset.action;
+    const cur = state.qty[id] || 0;
+    if (action === "plus") setQty(id, cur + 1);
+    if (action === "minus") setQty(id, cur - 1);
+  });
+
+  document.getElementById("clear").addEventListener("click", () => {
+    for (const it of state.items) state.qty[it.id] = 0;
+    renderGrid();
+    renderCart();
+  });
+
+  document.getElementById("send").addEventListener("click", () => {
+    const cartItems = state.items
+      .map(it => ({ id: it.id, name: it.name, price: it.price, qty: state.qty[it.id] || 0 }))
+      .filter(x => x.qty > 0);
+
+    if (!cartItems.length) { alert("Корзина пустая"); return; }
+
+    const payload = {
+      v: 1,
+      createdAt: new Date().toISOString(),
+      currency: "RUB",
+      items: cartItems,
+      total: calcTotal()
+    };
+
+    tg?.sendData(JSON.stringify(payload));
+    tg?.close();
+  });
+
+  (async () => {
+    try {
+      state.items = await loadItemsFromSheets();
+      if (!state.items.length) throw new Error("No items");
+      for (const it of state.items) state.qty[it.id] = 0;
+      renderGrid();
+      renderCart();
+    } catch (e) {
+      grid.innerHTML = `<div class="card">Не получилось загрузить прайс из Google Sheets. Проверь доступ к таблице и API key.</div>`;
+    }
+  })();
+</script>
