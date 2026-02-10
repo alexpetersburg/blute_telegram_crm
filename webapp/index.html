@@ -1,155 +1,231 @@
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script>
-  const tg = window.Telegram?.WebApp;
-  if (tg) tg.ready();
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Blüte касса</title>
+  <style>
+    :root { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial; }
+    body { margin: 0; padding: 12px; background: #f6f6f7; }
+    h1 { margin: 0 0 10px; font-size: 18px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .card { background: #fff; border-radius: 14px; padding: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    .name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+    .price { color: #555; font-size: 13px; margin-bottom: 10px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .btn { border: 0; border-radius: 12px; padding: 10px 12px; font-weight: 700; cursor: pointer; }
+    .btnSmall { padding: 8px 10px; border-radius: 12px; font-weight: 800; }
+    .btnPlus { background: #e8f7ee; }
+    .btnMinus { background: #fdecec; }
+    .qty { min-width: 26px; text-align: center; font-weight: 700; }
+    .section { margin-top: 12px; }
+    .cartLine { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #eee; }
+    .cartLeft { display: flex; flex-direction: column; gap: 2px; }
+    .muted { color: #666; font-size: 12px; }
+    .total { background: #fff; border-radius: 14px; padding: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    .totalRow { display:flex; justify-content: space-between; font-size: 16px; font-weight: 800; }
+    .actions { display:flex; gap: 10px; margin-top: 10px; }
+    .btnPrimary { background: #111; color: #fff; flex: 1; }
+    .btnGhost { background: #fff; flex: 1; }
+    .hint { margin-top: 8px; font-size: 12px; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Касса</h1>
 
-  // === НАСТРОЙКИ GOOGLE SHEETS ===
-  const SHEET_ID = "1erHSPEUpDIz-RFH65KcmMQoEXUOSnoK5ApaEkE3knzQ";
-  const SHEET_NAME = "price";                 // имя листа
-  const API_KEY = "AIzaSyCQi8CffTSXvWfdoJ7t0bknoJq4NWzOZgY";       // ключ из Google Cloud
-  const RANGE = `${SHEET_NAME}!A1:E100`;      // id,name,price,enabled,sort
+  <div id="grid" class="grid"></div>
 
-  const state = { qty: {}, items: [] };
+  <div class="section total">
+    <div class="totalRow">
+      <div>Итог</div>
+      <div id="total">0 ₽</div>
+    </div>
+    <div class="hint">Если открыть не из Telegram, кнопка “Отправить заказ” не отправит данные боту.</div>
+    <div class="actions">
+      <button class="btn btnGhost" id="clear">Очистить</button>
+      <button class="btn btnPrimary" id="send">Отправить заказ</button>
+    </div>
+  </div>
 
-  const grid = document.getElementById("grid");
-  const cart = document.getElementById("cart");
-  const totalEl = document.getElementById("total");
+  <div class="section card">
+    <div class="name">Корзина</div>
+    <div id="cart" class="muted">Пока пусто</div>
+  </div>
 
-  function money(n){ return `${Number(n).toLocaleString("ru-RU")} ₽`; }
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) tg.ready();
 
-  async function loadItemsFromSheets() {
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(RANGE)}?key=${API_KEY}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("Sheets API error");
-    const data = await res.json();
+    // === НАСТРОЙКИ GOOGLE SHEETS ===
+    const SHEET_ID = "1erHSPEUpDIz-RFH65KcmMQoEXUOSnoK5ApaEkE3knzQ";
+    const SHEET_NAME = "price";
+    const API_KEY = "AIzaSyCQi8CffTSXvWfdoJ7t0bknoJq4NWzOZgY"; // пересоздай, этот уже светанулся
+    const RANGE = `${SHEET_NAME}!A1:E100`; // id,name,price,enabled,sort
 
-    const rows = data.values || [];
-    if (rows.length < 2) return [];
+    const state = { qty: {}, items: [] };
 
-    const header = rows[0].map(h => String(h).trim().toLowerCase());
-    const idx = (name) => header.indexOf(name);
+    function money(n){ return `${Number(n).toLocaleString("ru-RU")} ₽`; }
 
-    const iId = idx("id");
-    const iName = idx("name");
-    const iPrice = idx("price");
-    const iEnabled = idx("enabled");
-    const iSort = idx("sort");
+    async function loadItemsFromSheets() {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(RANGE)}?key=${API_KEY}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`Sheets API error: ${res.status} ${t}`);
+      }
+      const data = await res.json();
+      const rows = data.values || [];
+      if (rows.length < 2) return [];
 
-    const items = [];
-    for (const r of rows.slice(1)) {
-      const id = String(r[iId] ?? "").trim();
-      const name = String(r[iName] ?? "").trim();
-      const price = Number(String(r[iPrice] ?? "0").replace(",", "."));
-      const enabledRaw = String(r[iEnabled] ?? "TRUE").trim().toUpperCase();
-      const enabled = enabledRaw === "TRUE" || enabledRaw === "1" || enabledRaw === "YES";
-      const sort = Number(String(r[iSort] ?? "0"));
+      const header = rows[0].map(h => String(h).trim().toLowerCase());
+      const idx = (name) => header.indexOf(name);
 
-      if (!id || !name || !Number.isFinite(price)) continue;
-      if (!enabled) continue;
+      const iId = idx("id");
+      const iName = idx("name");
+      const iPrice = idx("price");
+      const iEnabled = idx("enabled");
+      const iSort = idx("sort");
 
-      items.push({ id, name, price: Math.round(price), sort: Number.isFinite(sort) ? sort : 0 });
+      const items = [];
+      for (const r of rows.slice(1)) {
+        const id = String(r[iId] ?? "").trim();
+        const name = String(r[iName] ?? "").trim();
+        const price = Number(String(r[iPrice] ?? "0").replace(",", "."));
+        const enabledRaw = String(r[iEnabled] ?? "TRUE").trim().toUpperCase();
+        const enabled = enabledRaw === "TRUE" || enabledRaw === "1" || enabledRaw === "YES";
+        const sort = Number(String(r[iSort] ?? "0"));
+
+        if (!id || !name || !Number.isFinite(price)) continue;
+        if (!enabled) continue;
+
+        items.push({ id, name, price: Math.round(price), sort: Number.isFinite(sort) ? sort : 0 });
+      }
+
+      items.sort((a,b) => a.sort - b.sort);
+      return items.slice(0, 15);
     }
 
-    items.sort((a,b) => a.sort - b.sort);
-    return items.slice(0, 15);
-  }
-
-  function calcTotal() {
-    let total = 0;
-    for (const it of state.items) total += (state.qty[it.id] || 0) * it.price;
-    return total;
-  }
-
-  function renderGrid() {
-    grid.innerHTML = "";
-    for (const it of state.items) {
-      const q = state.qty[it.id] || 0;
-      const el = document.createElement("div");
-      el.className = "card";
-      el.innerHTML = `
-        <div class="name">${it.name}</div>
-        <div class="price">${money(it.price)} за шт</div>
-        <div class="row">
-          <button class="btn btnSmall btnMinus" data-id="${it.id}" data-action="minus">−</button>
-          <div class="qty" id="qty_${it.id}">${q}</div>
-          <button class="btn btnSmall btnPlus" data-id="${it.id}" data-action="plus">+</button>
-        </div>
-      `;
-      grid.appendChild(el);
+    function calcTotal() {
+      let total = 0;
+      for (const it of state.items) total += (state.qty[it.id] || 0) * it.price;
+      return total;
     }
-  }
 
-  function renderCart() {
-    const lines = [];
-    for (const it of state.items) {
-      const q = state.qty[it.id] || 0;
-      if (!q) continue;
-      const sum = q * it.price;
-      lines.push(`
-        <div class="cartLine">
-          <div class="cartLeft">
-            <div><b>${it.name}</b></div>
-            <div class="muted">${q} × ${money(it.price)} = ${money(sum)}</div>
+    function renderGrid() {
+      const grid = document.getElementById("grid");
+      grid.innerHTML = "";
+      for (const it of state.items) {
+        const q = state.qty[it.id] || 0;
+        const el = document.createElement("div");
+        el.className = "card";
+        el.innerHTML = `
+          <div class="name">${it.name}</div>
+          <div class="price">${money(it.price)} за шт</div>
+          <div class="row">
+            <button class="btn btnSmall btnMinus" data-id="${it.id}" data-action="minus">−</button>
+            <div class="qty" id="qty_${it.id}">${q}</div>
+            <button class="btn btnSmall btnPlus" data-id="${it.id}" data-action="plus">+</button>
           </div>
-          <div style="font-weight:800">${money(sum)}</div>
-        </div>
-      `);
+        `;
+        grid.appendChild(el);
+      }
     }
-    cart.innerHTML = lines.length ? lines.join("") : "Пока пусто";
-    totalEl.textContent = money(calcTotal());
-  }
 
-  function setQty(id, next) {
-    state.qty[id] = Math.max(0, next);
-    const qEl = document.getElementById(`qty_${id}`);
-    if (qEl) qEl.textContent = state.qty[id];
-    renderCart();
-  }
+    function renderCart() {
+      const cart = document.getElementById("cart");
+      const totalEl = document.getElementById("total");
 
-  grid.addEventListener("click", (e) => {
-    const btn = e.target.closest("button");
-    if (!btn) return;
-    const id = btn.dataset.id;
-    const action = btn.dataset.action;
-    const cur = state.qty[id] || 0;
-    if (action === "plus") setQty(id, cur + 1);
-    if (action === "minus") setQty(id, cur - 1);
-  });
+      const lines = [];
+      for (const it of state.items) {
+        const q = state.qty[it.id] || 0;
+        if (!q) continue;
+        const sum = q * it.price;
+        lines.push(`
+          <div class="cartLine">
+            <div class="cartLeft">
+              <div><b>${it.name}</b></div>
+              <div class="muted">${q} × ${money(it.price)} = ${money(sum)}</div>
+            </div>
+            <div style="font-weight:800">${money(sum)}</div>
+          </div>
+        `);
+      }
+      cart.innerHTML = lines.length ? lines.join("") : "Пока пусто";
+      totalEl.textContent = money(calcTotal());
+    }
 
-  document.getElementById("clear").addEventListener("click", () => {
-    for (const it of state.items) state.qty[it.id] = 0;
-    renderGrid();
-    renderCart();
-  });
-
-  document.getElementById("send").addEventListener("click", () => {
-    const cartItems = state.items
-      .map(it => ({ id: it.id, name: it.name, price: it.price, qty: state.qty[it.id] || 0 }))
-      .filter(x => x.qty > 0);
-
-    if (!cartItems.length) { alert("Корзина пустая"); return; }
-
-    const payload = {
-      v: 1,
-      createdAt: new Date().toISOString(),
-      currency: "RUB",
-      items: cartItems,
-      total: calcTotal()
-    };
-
-    tg?.sendData(JSON.stringify(payload));
-    tg?.close();
-  });
-
-  (async () => {
-    try {
-      state.items = await loadItemsFromSheets();
-      if (!state.items.length) throw new Error("No items");
-      for (const it of state.items) state.qty[it.id] = 0;
-      renderGrid();
+    function setQty(id, next) {
+      state.qty[id] = Math.max(0, next);
+      const qEl = document.getElementById(`qty_${id}`);
+      if (qEl) qEl.textContent = state.qty[id];
       renderCart();
-    } catch (e) {
-      grid.innerHTML = `<div class="card">Не получилось загрузить прайс из Google Sheets. Проверь доступ к таблице и API key.</div>`;
     }
-  })();
-</script>
+
+    function bindEvents() {
+      const grid = document.getElementById("grid");
+      const clearBtn = document.getElementById("clear");
+      const sendBtn = document.getElementById("send");
+
+      if (!grid || !clearBtn || !sendBtn) {
+        console.error("Missing DOM elements", { grid, clearBtn, sendBtn });
+        return;
+      }
+
+      grid.addEventListener("click", (e) => {
+        const btn = e.target.closest("button");
+        if (!btn) return;
+        const id = btn.dataset.id;
+        const action = btn.dataset.action;
+        const cur = state.qty[id] || 0;
+        if (action === "plus") setQty(id, cur + 1);
+        if (action === "minus") setQty(id, cur - 1);
+      });
+
+      clearBtn.addEventListener("click", () => {
+        for (const it of state.items) state.qty[it.id] = 0;
+        renderGrid();
+        renderCart();
+      });
+
+      sendBtn.addEventListener("click", () => {
+        const cartItems = state.items
+          .map(it => ({ id: it.id, name: it.name, price: it.price, qty: state.qty[it.id] || 0 }))
+          .filter(x => x.qty > 0);
+
+        if (!cartItems.length) { alert("Корзина пустая"); return; }
+
+        const payload = {
+          v: 1,
+          createdAt: new Date().toISOString(),
+          currency: "RUB",
+          items: cartItems,
+          total: calcTotal()
+        };
+
+        if (!tg) {
+          alert("Открой кассу из Telegram бота, чтобы отправлять заказ.");
+          return;
+        }
+
+        tg.sendData(JSON.stringify(payload));
+        tg.close();
+      });
+    }
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      bindEvents();
+      try {
+        state.items = await loadItemsFromSheets();
+        if (!state.items.length) throw new Error("No items");
+        for (const it of state.items) state.qty[it.id] = 0;
+        renderGrid();
+        renderCart();
+      } catch (e) {
+        document.getElementById("grid").innerHTML =
+          `<div class="card">Не получилось загрузить прайс из Google Sheets.<br><span class="muted">${String(e.message || e)}</span></div>`;
+      }
+    });
+  </script>
+</body>
+</html>
