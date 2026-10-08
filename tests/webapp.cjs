@@ -18,7 +18,8 @@ const rows = [['id', 'name', 'price', 'enabled', 'sort'],
 async function main() {
   const root = path.resolve(__dirname, '../webapp');
   const server = http.createServer((req, res) => {
-    const name = req.url === '/' ? 'index.html' : req.url.slice(1);
+    const pathname = new URL(req.url, 'http://localhost').pathname;
+    const name = pathname === '/' ? 'index.html' : pathname.slice(1);
     if (!['index.html', 'app.js', 'config.js', 'styles.css'].includes(name)) { res.writeHead(404).end(); return; }
     res.setHeader('Content-Type', name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
     res.end(fs.readFileSync(path.join(root, name)));
@@ -31,7 +32,7 @@ async function main() {
     page.on('pageerror', error => errors.push(error.message));
     let failSheets = false;
     let currentRows = rows;
-    await page.route('https://telegram.org/**', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
+    await page.route('https://telegram.org/**', route => route.fulfill({ contentType: 'text/javascript', body: 'if (!window.Telegram) window.Telegram = {WebApp: {initData: "", platform: "unknown", ready() {}, sendData() { throw new Error("Browser must not send"); }}};' }));
     await page.route('https://sheets.googleapis.com/**', route => route.fulfill({ status: failSheets ? 503 : 200, contentType: 'application/json', body: JSON.stringify({ values: currentRows }) }));
     const url = `http://127.0.0.1:${server.address().port}/`;
     await page.goto(url);
@@ -93,14 +94,17 @@ async function main() {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Narrow mobile view fits the screen');
     await page.locator('#mobile-summary').click();
     assert.equal(await page.locator('#order-title').evaluate(el => { const rect = el.getBoundingClientRect(); return rect.top >= 0 && rect.bottom < window.innerHeight; }), true, 'Mobile summary links to the order');
+    await page.evaluate(() => localStorage.clear());
     await page.addInitScript(() => {
-      window.Telegram = { WebApp: { initData: 'test', initDataUnsafe: { user: { id: 123 } }, ready() {}, expand() {}, sendData(value) { window.sentPayload = JSON.parse(value); } } };
+      // Real keyboard launches have neither initData nor a user ID.
+      window.Telegram = { WebApp: { initData: '', platform: 'tdesktop', initDataUnsafe: {}, ready() {}, expand() {}, sendData(value) { window.sentPayload = JSON.parse(value); } } };
     });
     await page.reload();
     await page.waitForFunction(() => document.querySelectorAll('.product').length === 24);
     await page.locator('#search').fill('peony');
     await page.locator('#grid button[data-action="plus"]').click();
     await page.locator('#send').click();
+    assert.equal(await page.locator('#confirm-send').isDisabled(), false, 'Keyboard launch with empty initData can send');
     await page.locator('#confirm-send').click();
     const payload = await page.evaluate(() => window.sentPayload);
     assert.equal(payload.v, 1);

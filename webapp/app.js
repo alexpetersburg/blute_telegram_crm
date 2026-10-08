@@ -1,7 +1,9 @@
 "use strict";
 
 const tg = window.Telegram && window.Telegram.WebApp;
-const inTelegram = Boolean(tg && tg.initData);
+// KeyboardButton launches have empty initData. The SDK's platform is "unknown"
+// in a regular browser; use it only for UI availability, not authentication.
+const inTelegram = Boolean(tg && tg.platform && tg.platform !== "unknown" && typeof tg.sendData === "function");
 const STORAGE_KEY = `blute:draft:${SHEET_ID}:${SHEET_NAME}:${tg?.initDataUnsafe?.user?.id || "browser"}`;
 const FAVORITES_KEY = `${STORAGE_KEY}:favorites`;
 const state = { items: [], qty: Object.create(null), favorites: new Set(), query: "", filter: "all", sort: "default", loading: false, sending: false };
